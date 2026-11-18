@@ -18,9 +18,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Descargar repositorio
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2. Detectar directorio del proyecto
       - name: Detect project directory
         shell: bash
         run: |
@@ -29,40 +31,99 @@ jobs:
           elif [ -f "SD-LYGANE/build.gradle.kts" ] && [ -f "SD-LYGANE/app/build.gradle.kts" ]; then
             echo "PROJECT_DIR=SD-LYGANE" >> "$GITHUB_ENV"
           else
-            echo "Android project not found"
+            echo "ERROR: Android project not found"
             exit 1
           fi
 
+      # 3. Configurar Java 17
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Gradle
+      # 4. Configurar Gradle
+      - name: Setup Gradle 8.11.1
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.11.1'
 
-      - name: Install Android SDK packages
+      # 5. Instalar Android Command-line Tools
+      - name: Install Android Command-line Tools
+        shell: bash
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          yes | sdkmanager --licenses
-          sdkmanager \
+          set -e
+
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/android-sdk}}"
+
+          mkdir -p "$SDK/cmdline-tools/latest"
+
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+
+          echo "Downloading Android Command-line Tools..."
+
+          curl -fL \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            -o "$RUNNER_TEMP/android-tools.zip"
+
+          mkdir -p "$RUNNER_TEMP/android-tools"
+
+          unzip -q "$RUNNER_TEMP/android-tools.zip" \
+            -d "$RUNNER_TEMP/android-tools"
+
+          cp -a "$RUNNER_TEMP/android-tools/cmdline-tools/." \
+            "$SDK/cmdline-tools/latest/"
+
+          echo "$SDK/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK/platform-tools" >> "$GITHUB_PATH"
+
+          echo "Android Command-line Tools installed."
+
+      # 6. Instalar componentes Android SDK
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -e
+
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -f "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found"
+            exit 1
+          fi
+
+          echo "Accepting Android SDK licenses..."
+          yes | "$SDKMANAGER" --sdk_root="$SDK" --licenses || true
+
+          echo "Installing Android SDK 35..."
+
+          "$SDKMANAGER" --sdk_root="$SDK" \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
+      # 7. Verificar herramientas
+      - name: Verify build environment
+        run: |
+          java -version
+          gradle --version
+          sdkmanager --version
+
+      # 8. Compilar APK Debug
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           gradle --no-daemon --stacktrace :app:assembleDebug
 
+      # 9. Compilar APK Release
       - name: Build Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           gradle --no-daemon --stacktrace :app:assembleRelease
 
+      # 10. Publicar APKs
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
